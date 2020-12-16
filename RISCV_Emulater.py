@@ -13,14 +13,13 @@
 # もらったやつは，0x1000から始まるアドレスのDRAMにアドレスを一つずつ増やしながら入れていく
 # pcは0x1000で初期化してメモリを読みながら命令を実行する
 
-# In[ ]:
 
 
 from enum import IntEnum,auto
 class Mode(IntEnum):
-    M = 0
-    S = 2
-    U = 3
+    M = 3
+    S = 1
+    U = 0
 class Interrupt(IntEnum):
     user_software_interrupt = 0
     supervisor_software_interrupt = 1
@@ -52,57 +51,12 @@ class MemoryAccessType(IntEnum):
     store = 2
     
     
-    
-    
-    
-
-
-# In[5]:
-
-
-
-opcodes = {
-    "addi",
-    "slti",
-    "sltiu",
-    "andi",
-    "ori",
-    "xori",
-    "slli",
-    "srli",
-    "srai",
-    "lui",
-    "auipc",
-    "add",
-    "slt",
-    "sltu",
-    "and",
-    "or",
-    "xor",
-    "sll",
-    "srl",
-    "sub",
-    "sra",
-    "nop",
-    "jal",
-    "jalr",
-    "beq",
-    "bne",
-    "blt",
-    "bltu",
-    "bge",
-    "bgeu",
-    "load",
-    "store",
-    "fence",
-    "ecall",
-    "ebreak"
-}
 
 MAX_64 = 2**64
 MAX_32 = 2**32
 reg = [0 for i in range(32)]
 pc = 0
+previous_pc = 0
 mode = Mode.M
 finished = False
 pc_updated = False
@@ -131,8 +85,9 @@ def write_csr(idx,msb,lsb,imm):
     tmp -= tmp & ((1<<(msb+1)) - (1<<lsb))
     csr[idx] = tmp | fromto(imm,msb-lsb,0) << lsb
 def update_pc(new):
-    global pc, pc_updated
+    global pc, previous_pc, pc_updated
     pc_updated = True
+    previous_pc = pc
     pc = new
 
 
@@ -572,12 +527,37 @@ MIE_SSIE_LSB = 1
 MIE_USIE_MSB = 0
 MIE_USIE_LSB = 0
 
+SSTATUS_SD_MSB = 63
+SSTATUS_SD_LSB = 63
+SSTATUS_SXL_MSB = 35
+SSTATUS_SXL_LSB = 34
+SSTATUS_UXL_MSB = 33
+SSTATUS_UXL_LSB = 32
+SSTATUS_TSR_MSB = 22
+SSTATUS_TSR_LSB = 22
+SSTATUS_TW_MSB = 21
+SSTATUS_TW_LSB = 21
+SSTATUS_TVM_MSB = 20
+SSTATUS_TVM_LSB = 20
+SSTATUS_MXR_MSB = 19
+SSTATUS_MXR_LSB = 19
+SSTATUS_SUM_MSB = 18
+SSTATUS_SUM_LSB = 18
+SSTATUS_XS_MSB = 16
+SSTATUS_XS_LSB = 15
+SSTATUS_FS_MSB = 14
+SSTATUS_FS_LSB = 13
+SSTATUS_SPP_MSB = 8
+SSTATUS_SPP_LSB = 8
+SSTATUS_SPIE_MSB = 5
+SSTATUS_SPIE_LSB = 5
+SSTATUS_UPIE_MSB = 4
+SSTATUS_UPIE_LSB = 4
+SSTATUS_SIE_MSB = 1
+SSTATUS_SIE_LSB = 1
+SSTATUS_UIE_MSB = 0
+SSTATUS_UIE_LSB = 0
 
-
-
-
-
-# In[6]:
 
 
 LEVELS = 3
@@ -586,8 +566,6 @@ PAGESIZE = 1<<12
 def translate_addr(va,accesstype):
     return va
 
-
-# In[67]:
 
 
 def rtype(code):
@@ -887,29 +865,36 @@ def _csrrci(code):
         csr[idx] = csr[idx] & (~uimm)
 
 
-# # Supervisor Instruction
 
-# In[16]:
+
+
+
+
 
 
 def sfence_vma(code):
     return
 
 
-# # Priviledged Instruction
 
-# In[ ]:
+
+
+
+
+
+
 
 
 def _ecall(code):
     if mode == Mode.M:
-        generate_exception(code,Exception.environment_call_from_mmode)
+        generate_exception(code,Exception.environment_call_from_mmode,0)
     elif mode == Mode.S:
-        generate_exception(code,Exception.environment_call_from_smode)
+        generate_exception(code,Exception.environment_call_from_smode,0)
     elif mode == Mode.U:
-        generate_exception(code,Exception.environment_call_from_umode)
+        generate_exception(code,Exception.environment_call_from_umode,0)
 def _ebreak(code):
-    generate_exception(code,Exception.breakpoint)
+    global pc
+    generate_exception(code,Exception.breakpoint,pc)
 def _mret(code):
     global mode
     update_pc(csr[Csr_index.mepc])
@@ -927,19 +912,22 @@ def _mret(code):
 
 def _sret(code):
     global mode
-    if mode == Mode.M:
-        _mret(code)
-
-    update_pc(csr[Csr_index.sepc])
-    y = fromto(csr[Csr_index.mstatus],MSTATUS_SPP_MSB,MSTATUS_SPP_LSB)
-    if y == 0b0:
-        mode = Mode.U
+    if mode == Mode.S and at(csr[Csr_index.mstatus],MSTATUS_TSR_MSB) == 1:
+        generate_exception(Exception.illegal_instruction,code)
     else:
-        mode = Mode.S
-    write_csr(Csr_index.mstatus,MSTATUS_SIE_MSB,MSTATUS_SIE_LSB,
-              fromto(csr[Csr_index.mstatus],MSTATUS_SPIE_MSB,MSTATUS_SPIE_LSB))
-    write_csr(Csr_index.mstatus,MSTATUS_SPIE_MSB,MSTATUS_SPIE_LSB,1)
-    write_csr(Csr_index.mstatus,MSTATUS_SPP_MSB,MSTATUS_SPP_LSB,0b00)
+        if mode == Mode.M:
+            _mret(code)
+
+        update_pc(csr[Csr_index.sepc])
+        y = fromto(csr[Csr_index.mstatus],MSTATUS_SPP_MSB,MSTATUS_SPP_LSB)
+        if y == 0b0:
+            mode = Mode.U
+        else:
+            mode = Mode.S
+        write_csr(Csr_index.mstatus,MSTATUS_SIE_MSB,MSTATUS_SIE_LSB,
+                fromto(csr[Csr_index.mstatus],MSTATUS_SPIE_MSB,MSTATUS_SPIE_LSB))
+        write_csr(Csr_index.mstatus,MSTATUS_SPIE_MSB,MSTATUS_SPIE_LSB,1)
+        write_csr(Csr_index.mstatus,MSTATUS_SPP_MSB,MSTATUS_SPP_LSB,0b00)
 
 def _uret(code):
     global mode
@@ -960,40 +948,68 @@ def _uret(code):
 def _wfi(code):
     return
 
-def generate_exception(code,exception_code):
-    global mode, pc
-    if exception_code == Exception.environment_call_from_mmode:
-        print("mcall ex.")
-        tmp = csr[Csr_index.mepc]
-        csr[Csr_index.mepc] = pc
-    elif exception_code == Exception.environment_call_from_smode:
-        print("scall ex.")
-        csr[Csr_index.sepc] = pc
-        mode = Mode.M
-    elif exception_code == Exception.environment_call_from_umode:
-        print("ucall ex.")
-        csr[Csr_index.uepc] = pc
-        mode = Mode.M
-    elif exception_code == Exception.breakpoint:
-        print("breakpoint ex.") 
-    elif exception_code == Exception.illegal_instruction:
-        print("illegal inst ex.")
+def generate_exception(code,exception_code,trap_value):
+    global mode, pc, previous_pc
+    
+    #exception PC
+    epc = 0
+    if exception_code == Exception.instruction_address_misaligned:
+        epc = previous_pc
     else:
-        print("unknown ex.")
-    if mode == Mode.M:
+        epc = pc
+    
+    previous_mode = mode
+    mode = Mode.M
+
+    tvec = 0
+    if csr[Csr_index.medeleg] & (1<<int(exception_code)) == 0:
+        #do not delegate(mmode)
+        csr[Csr_index.mepc] = epc
         csr[Csr_index.mcause] = int(exception_code)
-    elif mode == Mode.S:
+        csr[Csr_index.mtval] = trap_value
+        tvec = csr[Csr_index.mtvec]
+        mode = Mode.S
+    else:
+        #delegate(smode)
+        csr[Csr_index.sepc] = epc
         csr[Csr_index.scause] = int(exception_code)
-    elif mode == Mode.U:
-        csr[Csr_index.ucause] = int(exception_code)
-    update_pc(csr[Csr_index.mtvec])
+        csr[Csr_index.stval] = trap_value
+        tvec = csr[Csr_index.stvec]
+    
+    #update status csr
+    if csr[Csr_index.medeleg] & (1<<int(exception_code)) == 0:
+        #do not delegate(mmode)
+        write_csr(Csr_index.mstatus,
+                  MSTATUS_MPP_MSB,MSTATUS_MPP_LSB,
+                  int(previous_mode))
+        write_csr(Csr_index.mstatus,
+                  MSTATUS_MPIE_MSB,MSTATUS_MPIE_LSB,
+                  fromto(csr[Csr_index.mstatus],
+                         MSTATUS_MIE_MSB,
+                         MSTATUS_MIE_LSB))
+        write_csr(Csr_index.mstatus,
+                  MSTATUS_MIE_MSB,MSTATUS_MIE_LSB,
+                  0)
+    else:
+        #delegate(smode)
+        write_csr(Csr_index.sstatus,
+                  SSTATUS_SPP_MSB,SSTATUS_SPP_LSB,
+                  int(previous_mode))
+        write_csr(Csr_index.sstatus,
+                  SSTATUS_SPIE_MSB,SSTATUS_SPIE_LSB,
+                  fromto(csr[Csr_index.sstatus],
+                         SSTATUS_SIE_MSB,
+                         SSTATUS_SIE_LSB))
+        write_csr(Csr_index.sstatus,
+                  SSTATUS_MIE_MSB,SSTATUS_MIE_LSB,
+                  0)
+
+    print(exception_code," exception generated. mode changed from ", previous_mode, " to ", mode)
+    update_pc(tvec)
 
 
 
 
-# # Decoder
-
-# In[ ]:
 
 
 OPCODE_LOAD      = 0b0000011
@@ -1044,7 +1060,7 @@ def decode(inst):
         elif funct3 == 0b111:
             _bgeu(inst)
         else:
-            generate_exception(inst,Exception.illegal_instruction)
+            generate_exception(inst,Exception.illegal_instruction,inst)
     elif opcode == OPCODE_LOAD:
         if   funct3 == 0b000:
             _lb(inst)
@@ -1061,7 +1077,7 @@ def decode(inst):
         elif funct3 == 0b110:
             _lwu(inst)
         else:
-            generate_exception(inst,Exception.illegal_instruction)
+            generate_exception(inst,Exception.illegal_instruction,inst)
     elif opcode == OPCODE_STORE:
         if   funct3 == 0b000:
             _sb(inst)
@@ -1072,10 +1088,9 @@ def decode(inst):
         elif funct3 == 0b011:
             _sd(inst)
         else:
-            generate_exception(inst,Exception.illegal_instruction)
+            generate_exception(inst,Exception.illegal_instruction,inst)
     elif opcode == OPCODE_OP_IMM:
         if   funct3 == 0b000:
-            print("addi",inst)
             _addi(inst)
         elif funct3 == 0b010:
             _slti(inst)
@@ -1095,9 +1110,9 @@ def decode(inst):
             elif funct7 == 0b100000:
                 _srai(inst)
             else:
-                generate_exception(inst,Exception.illegal_instruction)
+                generate_exception(inst,Exception.illegal_instruction,inst)
         else:
-            generate_exception(inst,Exception.illegal_instruction)
+            generate_exception(inst,Exception.illegal_instruction,inst)
     elif opcode == OPCODE_OP:
         #RV32/64M here
         
@@ -1108,7 +1123,7 @@ def decode(inst):
             elif funct7 == 0b100000:
                 _sub(inst)
             else:
-                generate_exception(inst,Exception.illegal_instruction)
+                generate_exception(inst,Exception.illegal_instruction,inst)
         elif funct3 == 0b001:
             _sll(inst)
         elif funct3 == 0b010:
@@ -1123,20 +1138,20 @@ def decode(inst):
             elif funct7 == 0b100000:
                 _sra(inst)
             else:
-                generate_exception(inst,Exception.illegal_instruction)
+                generate_exception(inst,Exception.illegal_instruction,inst)
         elif funct3 == 0b110:
             _or(inst)
         elif funct3 == 0b111:
             _and(inst)
         else:
-            generate_exception(inst,Exception.illegal_instruction)
+            generate_exception(inst,Exception.illegal_instruction,inst)
     elif opcode == OPCODE_MISC_MEM:
         if   funct3 == 0b000:
             _fence(inst)
         elif funct3 == 0b001:
             _fence_i(inst)
         else:
-            generate_exception(inst,Exception.illegal_instruction)
+            generate_exception(inst,Exception.illegal_instruction,inst)
     elif opcode == OPCODE_SYSTEM:
         if   funct3 == 0b000:
             if fromto(inst,24,20) == 0b00010:
@@ -1147,15 +1162,15 @@ def decode(inst):
                 elif funct7 == 0b11000:
                     _mret(inst)
                 else:
-                    generate_exception(inst,Exception.illegal_instruction)
+                    generate_exception(inst,Exception.illegal_instruction,inst)
             elif funct7 == 0:
                 _ecall(inst)
             elif funct7 == 1:
                 _ebreak(inst)
             else:
-                generate_exception(inst,Exception.illegal_instruction)
+                generate_exception(inst,Exception.illegal_instruction,inst)
         elif get_csr_index(fromto(inst,31,20)) not in csr:
-            generate_exception(inst,Exception.illegal_instruction)
+            generate_exception(inst,Exception.illegal_instruction,inst)
         elif funct3 == 0b001:
             _csrrw(inst)
         elif funct3 == 0b010:
@@ -1169,7 +1184,7 @@ def decode(inst):
         elif funct3 == 0b111:
             _csrrci(inst)
         else:
-            generate_exception(inst,Exception.illegal_instruction)
+            generate_exception(inst,Exception.illegal_instruction,inst)
     elif opcode == OPCODE_OP_IMM_32:
         if   funct3 == 0b000:
             _addiw(inst)
@@ -1181,9 +1196,9 @@ def decode(inst):
             elif funct7 == 0b100000:
                 _sraiw(inst)
             else:
-                generate_exception(inst,Exception.illegal_instruction)
+                generate_exception(inst,Exception.illegal_instruction,inst)
         else:
-            generate_exception(inst,Exception.illegal_instruction)   
+            generate_exception(inst,Exception.illegal_instruction,inst)   
     elif opcode == OPCODE_OP_32:
         if funct3 == 0b000:
             if funct7 == 0:
@@ -1191,7 +1206,7 @@ def decode(inst):
             elif funct7 == 0b100000:
                 _subw(inst)
             else:
-                generate_exception(inst,Exception.illegal_instruction)
+                generate_exception(inst,Exception.illegal_instruction,inst)
         elif funct3 == 0b001:
             _sllw(inst)
         elif funct3 == 0b101:
@@ -1200,18 +1215,17 @@ def decode(inst):
             elif funct7 == 0b100000:
                 _sraw(inst)
             else:
-                generate_exception(inst,Exception.illegal_instruction)
+                generate_exception(inst,Exception.illegal_instruction,inst)
         else:
-            generate_exception(inst,Exception.illegal_instruction)
+            generate_exception(inst,Exception.illegal_instruction,inst)
     else:
-        generate_exception(inst,Exception.illegal_instruction)
+        generate_exception(inst,Exception.illegal_instruction,inst)
     global pc_updated
     if pc_updated == False:
         update_pc(pc+4)
     pc_updated = False
 
 
-# In[7]:
 
 
 def reset():
@@ -1256,9 +1270,6 @@ def emulate(filename):
     else:
         print("program not terminated in limited cycles")
             
-
-
-# In[ ]:
 
 
 import sys
